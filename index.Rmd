@@ -1,0 +1,217 @@
+---
+title: "Practical Machine Learning Course Project"
+author: "Tyler Seekins"
+date: "March 5, 2016"
+output: html_document
+---
+
+
+#Project Introduction
+##Background
+
+Using devices such as Jawbone Up, Nike FuelBand, and Fitbit it is now possible to collect a large amount of data about personal activity relatively inexpensively. These type of devices are part of the quantified self movement – a group of enthusiasts who take measurements about themselves regularly to improve their health, to find patterns in their behavior, or because they are tech geeks. One thing that people regularly do is quantify how much of a particular activity they do, but they rarely quantify how well they do it. In this project, your goal will be to use data from accelerometers on the belt, forearm, arm, and dumbell of 6 participants. They were asked to perform barbell lifts correctly and incorrectly in 5 different ways. More information is available from the website here: http://groupware.les.inf.puc-rio.br/har (see the section on the Weight Lifting Exercise Dataset).
+
+
+##Data
+
+The training data for this project are available here:
+
+https://d396qusza40orc.cloudfront.net/predmachlearn/pml-training.csv
+
+The test data are available here:
+
+https://d396qusza40orc.cloudfront.net/predmachlearn/pml-testing.csv
+
+
+The data for this project come from this source: http://groupware.les.inf.puc-rio.br/har. If you use the document you create for this class for any purpose please cite them as they have been very generous in allowing their data to be used for this kind of assignment.
+
+
+##Purpose
+
+The goal of your project is to predict the manner in which they did the exercise. This is the "classe" variable in the training set. You may use any of the other variables to predict with. You should create a report describing how you built your model, how you used cross validation, what you think the expected out of sample error is, and why you made the choices you did. You will also use your prediction model to predict 20 different test cases.
+
+
+
+#Analysis
+##Load Required Packages and Get the Data
+
+Load Required Packages:
+```{r}
+require(caret)
+library(doParallel)
+```
+
+Load the data directly from the Url:
+```{r}
+trainUrl<-'https://d396qusza40orc.cloudfront.net/predmachlearn/pml-training.csv'
+testUrl<-'https://d396qusza40orc.cloudfront.net/predmachlearn/pml-testing.csv'
+
+training <- read.csv(url(trainUrl), na.strings=c("NA","#DIV/0!",""))
+testing <- read.csv(url(testUrl), na.strings=c("NA","#DIV/0!",""))
+```
+
+
+##Cleaning the Data
+
+Before an effective model can be built, it is necessary to remove features with poor out of sample predictive power from the data table. The user\_name variable is removed in order to develop a model that can be extrapolated to new users. The X variable and the time dependent variables (raw\_timestamp through num\_window) are removed in order to blind the learning machines from any time dependent patterns that may not be present in a new sample.
+
+Subset the Data:
+```{r}
+training<-training[,-c(1:7)]
+testing <-testing[,-c(1:7)]
+```
+
+
+Variables with a large number of missing values are unlikely to be useful for prediction and removing them improves computational cost.
+
+Remove columns with missing values:
+```{r}
+training<-training[,colSums(is.na(training))==0]
+testing<-testing[,colSums(is.na(testing))==0]
+```
+
+
+##Split Data Into Training, Validation sets:
+
+Due to the large sample size, 19622 points, it is possible to partition the training dataset further into a training set and a validation set. This allows the predictive capability of several models to be compared on the validation set before selecting the final model for use on the testing set. After applying the predictive model to the test set no more model tuning should take place to avoid overfitting.
+
+```{r}
+print(nrow(training))
+inTrain<-createDataPartition(training$classe,p=.6,list=FALSE)
+validation<-training[-inTrain,]
+newtraining<-training[inTrain,]
+```
+
+
+##Cross Validation
+
+Performing cross validation is straightforward using the caret trainControl function. The cross validation was performed with 10 folds and repeated 10 time. These values are a typical starting point and provide a good chance the training and prediction will succeed on the first try. They have a good balance of bias, variance, and computation time. A higher number of folds increases the variance but decreases the bias, and a higher number of repetitions can decrease the variance but will increase the computational cost. Additional values are not tested for this analysis. 
+
+Specify number of folds and repetitions:
+```{r}
+nfolds<-10
+nrepetitions<-10
+```
+
+Set seeds for reproducible parallel processing:
+```{r}
+#create a list of seed, here change the seed for each resampling
+set.seed(333)
+seeds <- vector(mode = "list", length = (nfolds*nrepetitions)+1)#length is = (n_repeats*nresampling)+1
+for(i in 1:(nfolds*nrepetitions)) seeds[[i]]<- sample.int(n=1000, 3) #(3 is the number of tuning parameter, mtry for rf, here equal to ncol(iris)-2)
+
+seeds[[(nrepetitions*nfolds)+1]]<-sample.int(1000, 1)#for the last model
+
+```
+
+Specify Cross Validation Strategy:
+```{r}
+
+fitControl <- trainControl(method = "repeatedcv",
+                           number = nfolds,
+                           repeats = nrepetitions,
+                           seeds=seeds)
+
+```
+
+
+##Building The Model
+
+This analysis explored the Random Forest and Gradient Bosting Machine (GBM) methods to predict the classe variable were explored. Random Forests are known as a good out of the box method for a variety of classification regression tasks. They are easier to tune and harder to overfit than GBM but can be outperformed by the GBM if the GBM is well tuned.
+
+Train Random Forest and Gradient Boosting Machine:
+```{r}
+
+##Prepare for parallel processing
+cl<-makeCluster(detectCores()-1)##leave one core for other work
+registerDoParallel(cl)
+
+
+##Train Models
+rfFit <- train(classe ~ ., data = newtraining,
+                 method = "rf",
+                 trControl = fitControl)
+
+gbmFit <- train(classe ~ ., data = newtraining,
+                 method = "gbm",
+                 trControl = fitControl,
+                 verbose = FALSE)
+
+##Stop Paralell Processing
+stopCluster(cl)
+```
+
+
+
+#Results
+##Training Results:
+
+Random forest Results:
+```{r}
+plot(rfFit)
+```
+
+GBM Results:
+```{r}
+plot(gbmFit)
+```
+
+Both the Random Forest and Gradient Boosting Machine allow for the variable importances to be estimated to determine which features are most relevant to prediction.
+
+Random Forest Variable Importance:
+```{r}
+plot(varImp(rfFit,scale=FALSE),top=10)
+```
+
+
+Gradient Boosting Machine Variable Importance:
+```{r}
+plot(varImp(gbmFit,scale=FALSE),top=10)
+```
+
+
+##Expected Out of Sample Error
+
+Expected out of Sample Error is equal to \1 - accuracy. By comparing the trained models predictions on the validation set to the true values, it is possible to estimate the accuracy and thus the out of sample error before attempting to predict the test set.
+
+Predict validation set classe using GBM and RF:
+```{r}
+gbmPred<-predict(gbmFit,validation)
+rfPred<-predict(rfFit,validation)
+```
+
+RF Confusion Matrix:
+```{r}
+rfconfusion<-confusionMatrix(rfPred,validation$classe)
+print(rfconfusion)
+```
+
+Expected RF Out of Sample Error:
+```{r}
+print(1-rfconfusion$overall['Accuracy'])
+```
+
+GBM Confusion Matrix:
+```{r}
+gbmconfusion<-confusionMatrix(gbmPred,validation$classe)
+print(gbmconfusion)
+```
+
+Expected GBM Out of Sample Error:
+```{r}
+print(1-gbmconfusion$overall['Accuracy'])
+```
+
+Results show the Random Forest has an estimated out of sample error of 1% and the Gradient Boosting Machine has an estimated out of sample error of 4%. 
+
+
+##Model Selection
+After scoring both the trained gradient boosting machine and random forest using the validation set the random forest model was selected to make the final predictions. Both algorithms showed comparable performance, however the random forest was selected as it yielded a lower estimated out of sample error rate and random forests generally have a lower tendency to overfit. 
+
+
+##Test Set Predictions
+The final project predictions were made using the previously trained Random Forest model: 
+```{r}
+predict(rfFit, testing)
+```
+
